@@ -320,3 +320,21 @@ tr.row-detail > td { background: #f7fbfc; border-bottom: 1px solid var(--line); 
   .layout { flex-direction: column; }
   .filters { width: 100%; flex: 1 1 auto; position: static; }
 }
+
+/* 判定依据与反事实 */
+.detail-wide { flex: 1 1 100%; min-width: 0; }
+.detail-wide .mini-table { display: table; }
+.why-wrap { overflow-x: auto; padding-bottom: 4px; }
+.why-wrap h5 { margin: 10px 0 4px; font-size: 13px; color: var(--primary-dark); }
+.why-wrap h5:first-child { margin-top: 2px; }
+.why {
+  font-size: 12.5px; line-height: 1.6; padding: 6px 10px; margin: 4px 0;
+  border-radius: 4px; border: 1px solid var(--line-soft); background: #fff;
+}
+.why b { color: var(--ink); }
+.why-ok { background: #eef8f1; border-color: #bfe3cd; }
+.why-bad { background: #fdeeee; border-color: #f1c7c7; }
+.remedy-steps { margin: 4px 0 6px; padding-left: 20px; font-size: 12.5px; line-height: 1.7; }
+.lever-relax { color: #1c6b3c; font-weight: 600; }
+.lever-tighten { color: #a3473a; font-weight: 600; }
+.why-wrap .mini-table th, .why-wrap .mini-table td { white-space: normal; }

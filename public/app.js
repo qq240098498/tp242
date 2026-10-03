@@ -23,6 +23,7 @@ const state = {
   roomDetail: {},
   batchDetail: {},
   batchOut: {},
+  batchExplain: {},
   batchDetailError: {},
   expandedRooms: new Set(),
   expandedBatches: new Set(),
@@ -393,14 +394,186 @@ function renderBatchRows() {
   }).join('');
 }
 
+function afterBadge(after) {
+  if (!after) return '';
+  return after.pass ? pill('整体转为满足', 'pill-ok') : pill('仍不满足', 'pill-bad');
+}
+
+function failedText(keys) {
+  const map = { records: '无记录', longest: '单次超限', total: '累计超限', chain: '断链', calibration: '探头校准' };
+  return (keys || []).map(function (k) { return map[k] || k; }).join('、') || '—';
+}
+
+/* 判定依据：每条结论落到具体记录 */
+function evidenceBlock(ex) {
+  if (!ex) return '<div class="detail-note">解释数据读不到（/api/batches/:id/explain 报错）。</div>';
+  const ev = ex.evidence;
+
+  // 最长超限
+  const L = ev.longest;
+  let longestHtml;
+  if (L.segmentIndex > 0) {
+    const pointRows = (L.points || []).map(function (p) {
+      return '<tr><td>' + esc(p.at) + '</td><td>' + esc(p.probeCode) + '</td><td class="num">' + num(p.temperatureC) + '</td><td>' + esc(p.id) + '</td></tr>';
+    }).join('');
+    const other = (L.otherSegments || []).map(function (s) {
+      return '第' + s.segmentIndex + '段 ' + esc(s.startAt) + '～' + esc(s.endAt) + '（' + s.minutes + ' 分钟，' + s.pointCount + ' 条）';
+    }).join('；');
+    longestHtml =
+      '<div class="why ' + (L.ok ? 'why-ok' : 'why-bad') + '">' +
+      '最长的是<b>第 ' + L.segmentIndex + ' 段</b>：' + esc(L.startAt) + ' ～ ' + esc(L.endAt) +
+      '，连续 <b>' + L.minutes + ' 分钟</b>，峰值 ' + num(L.peakC) + '℃，由下表 <b>' + L.pointCount + ' 条</b>记录构成；阈值 ' + L.limit + ' 分钟' +
+      (L.ok ? '，未超。' : '，<b>超出 ' + L.overMinutes + ' 分钟</b>。') +
+      '</div>' +
+      '<table class="mini-table"><thead><tr><th>时刻</th><th>探头</th><th class="num">温度(℃)</th><th>记录号</th></tr></thead><tbody>' + pointRows + '</tbody></table>' +
+      (other ? '<div class="detail-note">其余段：' + other + '</div>' : '');
+  } else {
+    longestHtml = '<div class="why why-ok">没有计时超限段（单点超限不占时长），最长 0 分钟，阈值 ' + L.limit + ' 分钟。</div>';
+  }
+
+  // 累计超限
+  const T = ev.total;
+  const totalRows = (T.segments || []).map(function (s) {
+    return '<tr><td class="num">' + s.segmentIndex + '</td><td>' + esc(s.startAt) + '</td><td>' + esc(s.endAt) +
+      '</td><td class="num">' + num(s.minutes) + '</td><td class="num">' + num(s.peakC) + '</td><td class="num">' + s.pointCount +
+      '</td><td>' + esc(s.pointIds.join('、')) + '</td></tr>';
+  }).join('') || '<tr><td colspan="7" class="empty">没有超限段</td></tr>';
+  const totalHtml =
+    '<div class="why ' + (T.ok ? 'why-ok' : 'why-bad') + '">累计超限由 <b>' + T.segmentCount + ' 段</b>相加，共 <b>' + T.value + ' 分钟</b>，阈值 ' + T.limit + ' 分钟' +
+    (T.ok ? '，未超。' : '，<b>超出 ' + T.overMinutes + ' 分钟</b>。跨月不重置。') + '</div>' +
+    '<table class="mini-table"><thead><tr><th>段</th><th>起</th><th>止</th><th class="num">时长(分)</th><th class="num">峰值(℃)</th><th class="num">条数</th><th>构成记录</th></tr></thead><tbody>' + totalRows + '</tbody></table>';
+
+  // 断链
+  const C = ev.chain;
+  const gapRows = (C.gaps || []).map(function (g) {
+    return '<tr><td class="num">' + g.index + '</td><td>' + esc(g.from.at) + '（' + esc(g.from.id) + '）</td><td>' + esc(g.to.at) + '（' + esc(g.to.id) + '）</td>' +
+      '<td class="num">' + g.minutes + '</td><td class="num">' + g.overMinutes + '</td></tr>';
+  }).join('') || '<tr><td colspan="5" class="empty">没有断链</td></tr>';
+  const chainHtml =
+    '<div class="why ' + (C.ok ? 'why-ok' : 'why-bad') + '">' +
+    (C.ok ? '相邻记录间隔都不超过 ' + C.thresholdMinutes + ' 分钟，全程没有断链。'
+      : '共有 <b>' + C.value + ' 处</b>断链（相邻记录间隔 &gt; ' + C.thresholdMinutes + ' 分钟），断在下表相邻两条记录之间。') + '</div>' +
+    '<table class="mini-table"><thead><tr><th>#</th><th>缺口前一条</th><th>缺口后一条</th><th class="num">实际(分)</th><th class="num">超门槛(分)</th></tr></thead><tbody>' + gapRows + '</tbody></table>';
+
+  // 校准
+  const K = ev.calibration;
+  const calRows = (K.expired || []).map(function (p) {
+    return '<tr><td>' + esc(p.probeCode) + '</td><td>' + esc(p.calibratedUntil) + '</td><td>' + esc(p.firstAt) + '</td><td>' + esc(p.lastAt) +
+      '</td><td class="num">' + p.overdueDays + '</td><td class="num">' + p.recordCount + '</td><td>' + esc(p.recordIds.slice(0, 6).join('、') + (p.recordIds.length > 6 ? ' 等' : '')) + '</td></tr>';
+  }).join('') || '<tr><td colspan="7" class="empty">参与判定的探头都在校准有效期内</td></tr>';
+  const calHtml =
+    '<div class="why ' + (K.ok ? 'why-ok' : 'why-bad') + '">' +
+    (K.ok ? '参与判定的探头都在校准有效期内（宽限期 ' + K.graceDays + ' 天）。'
+      : '有 <b>' + K.value + ' 台</b>探头已过校准有效期，见下表（首笔/末笔参与记录、超期天数、涉及记录）。') + '</div>' +
+    '<table class="mini-table"><thead><tr><th>探头</th><th>校准有效期至</th><th>首笔参与记录</th><th>末笔参与记录</th><th class="num">超期(天)</th><th class="num">记录数</th><th>涉及记录</th></tr></thead><tbody>' + calRows + '</tbody></table>';
+
+  // 无记录 / 被剔除记录
+  const recHtml = '<div class="why ' + (ev.records.ok ? 'why-ok' : 'why-bad') + '">' +
+    '参与判定的温度记录 <b>' + ev.records.value + '</b> 条' + (ev.records.ok ? '。' : '，<b>没有任何温度记录，不能放行</b>。') + '</div>';
+  const excluded = (ex.evaluated.excluded || []);
+  const exclHtml = excluded.length
+    ? '<div class="detail-note">另有 ' + excluded.length + ' 条记录未参与判定：' +
+      excluded.slice(0, 5).map(function (r) { return esc(r.at + ' ' + r.probeCode + ' ' + r.temperatureC + '℃：' + r.reason); }).join('；') +
+      (excluded.length > 5 ? ' 等' : '') + '</div>'
+    : '';
+
+  return '<div class="why-wrap">' +
+    '<h5>① 有没有记录</h5>' + recHtml +
+    '<h5>② 单次最长超限</h5>' + longestHtml +
+    '<h5>③ 累计超限由哪几段构成</h5>' + totalHtml +
+    '<h5>④ 断链发生在哪两条记录之间</h5>' + chainHtml +
+    '<h5>⑤ 哪台探头过了校准期</h5>' + calHtml +
+    exclHtml + '</div>';
+}
+
+/* 反事实：改记录 / 补断链 / 校准 / 放宽参数 */
+function counterfactualBlock(ex) {
+  if (!ex) return '';
+  const cf = ex.counterfactuals;
+
+  // 逐条超限记录的临界温度
+  const editRows = (cf.recordEdits || []).map(function (r) {
+    return '<tr><td>' + esc(r.at) + '</td><td>' + esc(r.probeCode) + '</td><td class="num">' + num(r.temperatureC) + '</td>' +
+      '<td>' + esc(r.direction) + '</td><td>' + esc(r.criticalText) + '</td><td>' + (r.flipsOverall ? pill('是', 'pill-ok') : pill('否', 'pill-bad')) + '</td>' +
+      '<td class="num">' + num(r.after.longestMinutes) + '/' + num(r.after.totalMinutes) + '</td><td>' + esc(failedText(r.after.failed)) + '</td></tr>';
+  }).join('') || '<tr><td colspan="8" class="empty">没有超限记录，无需改温</td></tr>';
+
+  // 最小整体翻转集合
+  let minimalHtml;
+  const m = cf.minimalRecordSets;
+  if (m && m.flipsOverall) {
+    const ids = (m.sets[0] || []).join('、');
+    minimalHtml = '<div class="why why-ok">最少只要改 <b>' + m.size + '</b> 条记录（' + esc(ids) + '）到温度带边界，整体结论即翻转为满足。</div>';
+  } else if (m && m.limited) {
+    minimalHtml = '<div class="why why-bad">超限点太多，单改一两条不能整体翻转；见下方“分条件改法”与“放宽参数”。</div>';
+  } else {
+    minimalHtml = '<div class="why why-bad">只改温度记录无法整体翻转（还存在断链或探头超期等问题），见下方分条件改法与组合整改。</div>';
+  }
+
+  // 分条件改法
+  const perRows = (cf.perConditionRecordSets || []).map(function (p) {
+    const name = p.condition === 'longest' ? '单次最长超限' : '累计超限';
+    let plan;
+    if (p.size === null) plan = '改温无法消除（' + (p.limited ? '超限点过多' : '可能为单点段，不占时长') + '）';
+    else plan = '改 ' + p.size + ' 条：' + esc((p.sets[0] || []).join('、'));
+    return '<tr><td>' + name + '</td><td>' + plan + '</td><td>' + esc(failedText(p.stillFailingWhenDone)) + '</td></tr>';
+  }).join('');
+  const perHtml = perRows ? '<table class="mini-table"><thead><tr><th>目标条件</th><th>改法（临界=改到温度带边界）</th><th>改完仍不满足的条件</th></tr></thead><tbody>' + perRows + '</tbody></table>' : '';
+
+  // 补录断链
+  const gapRows = (cf.gapFixes || []).map(function (g) {
+    const win = g.onePointWindow
+      ? '补 1 条即可，时刻落在 ' + esc(g.onePointWindow.earliestAt) + ' ～ ' + esc(g.onePointWindow.latestAt)
+      : '需补 ' + g.needCount + ' 条，建议时刻：' + g.addedRecords.map(function (a) { return esc(a.at); }).join('、');
+    return '<tr><td class="num">' + g.gapIndex + '</td><td>' + esc(g.fromAt) + ' ～ ' + esc(g.toAt) + '</td><td class="num">' + g.minutes + '</td><td>' + win + '</td><td class="num">' + num(g.suggestedTemperatureC) + '</td></tr>';
+  }).join('') || '<tr><td colspan="5" class="empty">没有断链，不需要补录</td></tr>';
+  const gapFlipNote = (cf.gapFixes || []).length
+    ? '<div class="why ' + (cf.gapFillCombinedFlips ? 'why-ok' : 'why-bad') + '">把上述缺口全部补齐后：' + afterBadge(cf.gapFillCombinedAfter) + '（' + esc(failedText(cf.gapFillCombinedAfter && cf.gapFillCombinedAfter.failed)) + '）</div>'
+    : '';
+
+  // 校准整改
+  const calRows = (cf.calibrationFixes || []).map(function (f) {
+    return '<tr><td>' + esc(f.probeCode) + '</td><td>' + esc(f.calibratedUntil) + '</td><td>有效期延到 ' + esc(f.extendCalibratedUntilTo) + '（或宽限 ' + f.graceDaysNeeded + ' 天）' + afterBadge(f.afterExtend) + '</td>' +
+      '<td>' + (f.removalFlipsOverall ? pill('剔除后整体满足', 'pill-ok') : pill('剔除后仍不满足', 'pill-bad')) + '<div class="detail-note">' + esc(failedText(f.afterRemoval.failed)) + '</div></td></tr>';
+  }).join('') || '<tr><td colspan="4" class="empty">没有超期探头</td></tr>';
+
+  // 参数杠杆
+  const leverRows = (cf.parameterLevers || []).map(function (l) {
+    const action = l.relaxText
+      ? '<span class="lever-relax">放宽：' + esc(l.relaxText) + '</span> ' + afterBadge(l.relaxFlipsOverall ? { pass: true } : { pass: false }) +
+        '<div class="detail-note">放宽后仍不满足：' + esc(failedText(l.relaxStillFailing)) + '</div>'
+      : '<span class="lever-tighten">反向临界：' + esc(l.tightenText || '') + '</span>';
+    return '<tr><td>' + esc(l.label) + '</td><td class="num">' + num(l.current) + ' ' + esc(l.unit) + '</td><td class="num">' + (l.actual == null ? '—' : num(l.actual) + ' ' + esc(l.unit)) + '</td><td>' + action + '</td></tr>';
+  }).join('');
+
+  // 组合整改
+  const rm = cf.remedy;
+  const remedyHtml = '<ol class="remedy-steps">' + (rm.steps.length ? rm.steps.map(function (s) { return '<li>' + s + '</li>'; }).join('') : '<li>当前没有需要整改的硬性问题（若仍未满足，见无记录/校准等条件）。</li>') + '</ol>' +
+    '<div class="why ' + (rm.finalPass ? 'why-ok' : 'why-bad') + '">以上整改整包模拟：' + (rm.finalPass ? '<b>整体转为满足，可放行</b>' : '<b>仍不满足</b>：' + esc(failedText(rm.finalStillFailing))) + '</div>';
+
+  return '<div class="why-wrap">' +
+    '<h5>A. 单独改某条超限记录（临界温度）</h5>' +
+    '<table class="mini-table"><thead><tr><th>时刻</th><th>探头</th><th class="num">现温(℃)</th><th>超限</th><th>临界改法</th><th>单改即整体翻转</th><th class="num">改后 最长/累计(分)</th><th>改后仍不满足</th></tr></thead><tbody>' + editRows + '</tbody></table>' +
+    '<h5>B. 最少改几条能整体翻转</h5>' + minimalHtml + perHtml +
+    '<h5>C. 补录断链（在缺口中间补带内读数）</h5>' +
+    '<table class="mini-table"><thead><tr><th>#</th><th>缺口</th><th class="num">间隔(分)</th><th>补录方案与时刻窗口</th><th class="num">建议温度(℃)</th></tr></thead><tbody>' + gapRows + '</tbody></table>' + gapFlipNote +
+    '<h5>D. 探头校准整改</h5>' +
+    '<table class="mini-table"><thead><tr><th>探头</th><th>现有效期至</th><th>延期/宽限方案</th><th>或剔除该探头记录</th></tr></thead><tbody>' + calRows + '</tbody></table>' +
+    '<h5>E. 放宽参数的临界值</h5>' +
+    '<table class="mini-table"><thead><tr><th>参数</th><th class="num">当前值</th><th class="num">实际/临界</th><th>放宽（或收紧）到多少会怎样</th></tr></thead><tbody>' + leverRows + '</tbody></table>' +
+    '<h5>F. 组合整改建议</h5>' + remedyHtml +
+    '</div>';
+}
+
 function batchDetailRow(b) {
   const d = state.batchDetail[b.id];
   if (!d) return '<tr class="row-detail"><td colspan="13"><div class="detail-note">正在读取批次详情…</div></td></tr>';
   const out = state.batchOut[b.id] || {};
+  const ex = state.batchExplain[b.id] || null;
 
   const records = (d.records || []).map(function (r) {
     const oor = out[r.id];
-    return '<tr><td>' + esc(r.at) + '</td><td>' + esc(r.probeCode) + '</td><td class="num">' + num(r.temperatureC) + '</td>' +
+    return '<tr data-rec="' + esc(r.id) + '"><td>' + esc(r.at) + '</td><td>' + esc(r.probeCode) + '</td><td class="num">' + num(r.temperatureC) + '</td>' +
       '<td>' + esc(r.source) + '</td>' +
       '<td>' + (oor ? pill('超限', 'pill-bad') : pill('正常', 'pill-mute')) + '</td>' +
       '<td>' + (r.probeExpired ? pill('已过期', 'pill-bad') : pill('有效', 'pill-mute')) + '</td></tr>';
@@ -419,22 +592,18 @@ function batchDetailRow(b) {
   }
 
   const gaps = (d.chainGaps || []).map(function (g) {
-    return '<tr><td>' + esc(g.from) + '</td><td>' + esc(g.to) + '</td><td class="num">' + num(g.minutes) + '</td>' +
+    const fromAt = (g.from && g.from.at) || g.from;
+    const toAt = (g.to && g.to.at) || g.to;
+    return '<tr><td>' + esc(fromAt) + '</td><td>' + esc(toAt) + '</td><td class="num">' + num(g.minutes) + '</td>' +
       '<td class="num">' + num(g.countedMinutes) + '</td></tr>';
   }).join('') || '<tr><td colspan="4" class="empty">没有断链缺口</td></tr>';
 
   const check = d.releaseCheck || {};
   const conds = (check.conditions || []).slice();
-  const expired = check.expiredProbes || [];
-  conds.push({ key: 'calibration', ok: expired.length === 0, value: expired.length, limit: 0, text: '参与判定的探头都在校准有效期内' });
   const condHtml = conds.map(function (c) {
     return '<li><span class="cond-text">' + okPill(c.ok) + ' ' + esc(c.text) + '</span>' +
       '<span class="cond-meta">实际 ' + esc(c.value) + '，阈值 ' + esc(c.limit) + '</span></li>';
   }).join('');
-
-  const expiredProbes = expired.map(function (p) {
-    return '<tr><td>' + esc(p.probeCode) + '</td><td>' + esc(p.calibratedUntil) + '</td><td>' + esc(p.at) + '</td></tr>';
-  }).join('') || '<tr><td colspan="3" class="empty">没有已过校准期的探头</td></tr>';
 
   const releases = (d.releases || []).map(function (r) {
     return '<tr><td>' + esc(r.decision) + '</td><td>' + esc(r.decidedAt) + '</td><td>' + esc(r.decider) + '</td>' +
@@ -454,12 +623,11 @@ function batchDetailRow(b) {
     '<div class="detail-block"><h4>超限段（' + (d.segments || []).length + '）</h4>' + segmentsHtml +
     '<h4>断链缺口（' + (d.chainGaps || []).length + '）</h4>' +
     '<table class="mini-table"><thead><tr><th>起</th><th>止</th><th class="num">实际(分)</th><th class="num">计入(分)</th></tr></thead><tbody>' + gaps + '</tbody></table></div>' +
-    '<div class="detail-block"><h4>放行判定</h4><ul class="cond-list">' + condHtml + '</ul>' +
-    '<h4>已过校准期的探头（' + expired.length + '）</h4>' +
-    '<table class="mini-table"><thead><tr><th>探头</th><th>校准有效期</th><th>记录时刻</th></tr></thead><tbody>' + expiredProbes + '</tbody></table></div>' +
+    '<div class="detail-block"><h4>放行判定</h4><ul class="cond-list">' + condHtml + '</ul>' + decisionBtns + '</div>' +
+    '<div class="detail-block detail-wide"><h4>判定依据（为什么是这个结论）</h4>' + evidenceBlock(ex) + '</div>' +
+    '<div class="detail-block detail-wide"><h4>反事实（怎么改会翻转，临界值是多少）</h4>' + counterfactualBlock(ex) + '</div>' +
     '<div class="detail-block"><h4>放行记录（' + (d.releases || []).length + '）</h4>' +
-    '<table class="mini-table"><thead><tr><th>决定</th><th>时刻</th><th>经办人</th><th class="num">MKT</th><th>依据</th></tr></thead><tbody>' + releases + '</tbody></table>' +
-    decisionBtns + '</div>' +
+    '<table class="mini-table"><thead><tr><th>决定</th><th>时刻</th><th>经办人</th><th class="num">MKT</th><th>依据</th></tr></thead><tbody>' + releases + '</tbody></table></div>' +
     '</div></td></tr>';
 }
 
@@ -468,16 +636,18 @@ async function expandBatch(id) {
     let detail = null;
     let detailError = null;
     let records = [];
+    let explain = null;
     try {
       const results = await Promise.all([
         api('GET', '/api/batches/' + encodeURIComponent(id)),
-        api('GET', '/api/records?batchId=' + encodeURIComponent(id))
+        api('GET', '/api/records?batchId=' + encodeURIComponent(id)),
+        api('GET', '/api/batches/' + encodeURIComponent(id) + '/explain').catch(function (e) { return { __error: e }; })
       ]);
       detail = results[0];
       records = results[1] || [];
+      explain = results[2] && results[2].__error ? null : results[2];
     } catch (err) {
-      /* 服务端 /api/batches/:id 在有记录时会 500（coldlib.probeOf 未导出），
-         这里退回可用的接口拼出详情，保证页面不空着、并如实显示报错。 */
+      /* 详情接口万一报错，退回 release-check 等接口拼出详情，并如实显示报错。 */
       detailError = err;
       const fallback = await Promise.all([
         api('GET', '/api/batches/' + encodeURIComponent(id) + '/release-check'),
@@ -493,8 +663,8 @@ async function expandBatch(id) {
           return Object.assign({}, r, { probeCode: r.probeCode, probeExpired: probe ? !!probe.expired : false });
         }),
         effectiveRecords: [],
-        segments: [],
-        segmentsUnavailable: true,
+        segments: (check.segments || []),
+        segmentsUnavailable: false,
         chainGaps: (check.chain && check.chain.gaps) || [],
         releases: fallback[2] || [],
         releaseCheck: check,
@@ -505,6 +675,7 @@ async function expandBatch(id) {
     records.forEach(function (r) { map[r.id] = r.outOfRange; });
     state.batchDetail[id] = detail;
     state.batchOut[id] = map;
+    state.batchExplain[id] = explain;
     state.batchDetailError[id] = detailError;
   }
   state.expandedBatches.add(id);
@@ -751,6 +922,7 @@ function openDecisionModal(batch, decision) {
       closeModal();
       delete state.batchDetail[batch.id];
       delete state.batchOut[batch.id];
+      delete state.batchExplain[batch.id];
       await refreshAfterMutation();
     } catch (err) { showError(err); }
   });
@@ -806,6 +978,7 @@ async function refreshAfterMutation() {
   state.roomDetail = {};
   state.batchDetail = {};
   state.batchOut = {};
+  state.batchExplain = {};
   state.batchDetailError = {};
   await loadView(state.view);
   for (let i = 0; i < exRooms.length; i += 1) {
@@ -882,6 +1055,7 @@ async function handleAction(action, el) {
         try {
           await api('DELETE', '/api/batches/' + encodeURIComponent(id));
           delete state.batchDetail[id];
+          delete state.batchExplain[id];
           state.expandedBatches.delete(id);
           await refreshAfterMutation();
         } catch (err) { showError(err); }

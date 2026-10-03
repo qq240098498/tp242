@@ -349,6 +349,17 @@ function decide(data, batchId, payload) {
     throw new AppError(400, 'VALIDATION_FAILED', '经办人要填', { decider: '经办人不能为空' });
   }
   const check = coldlib.releaseCheck(data, batch);
+  if (payload.decision === '放行' && !check.pass) {
+    const nameMap = {
+      records: '没有任何参与判定的温度记录',
+      longest: '单次连续超限 ' + check.longestMinutes + ' 分钟，超过允许值',
+      total: '累计超限 ' + check.totalMinutes + ' 分钟，超过允许值',
+      chain: '存在 ' + check.chain.gapCount + ' 处断链',
+      calibration: check.expiredProbes.length + ' 台参与判定的探头已过校准期',
+    };
+    const reasons = check.failed.map((k) => nameMap[k] || k);
+    throw new AppError(409, 'RELEASE_CHECK_FAILED', '当前不满足放行条件，不能放行：' + reasons.join('；'), { failed: check.failed, reasons });
+  }
   const release = {
     id: store.nextId('rl', data.releases),
     batchId: batch.id,

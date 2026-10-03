@@ -3,6 +3,7 @@ const store = require('./store');
 const { AppError } = require('./errors');
 const res = require('./resources');
 const coldlib = require('./coldlib');
+const explainLib = require('./explain');
 
 const router = express.Router();
 
@@ -104,6 +105,11 @@ router.get('/batches/:id/release-check', withData((data, req) => {
   const batch = data.batches.find((b) => b.id === req.params.id);
   if (!batch) throw new AppError(404, 'BATCH_NOT_FOUND', '这个批次不存在');
   return coldlib.releaseCheck(data, batch);
+}));
+router.get('/batches/:id/explain', withData((data, req) => {
+  const batch = data.batches.find((b) => b.id === req.params.id);
+  if (!batch) throw new AppError(404, 'BATCH_NOT_FOUND', '这个批次不存在');
+  return explainLib.explain(data, batch);
 }));
 router.post('/batches/:id/decision', withData((data, req) => ({ __save: true, __body: res.decide(data, req.params.id, req.body || {}) })));
 
