@@ -202,15 +202,29 @@ function listBatches(data, query) {
 function batchDetail(data, id) {
   const batch = data.batches.find((b) => b.id === id);
   if (!batch) throw new AppError(404, 'BATCH_NOT_FOUND', '这个批次不存在');
-  const rows = coldlib.recordsOfBatch(data, id).map((r) => Object.assign({}, r, {
-    probeCode: probeCode(data, r.probeId),
-    probeExpired: !coldlib.probeValidOn(coldlib.probeOf(data, r.probeId), String(r.at).slice(0, 10)),
-  }));
+  const grace = Number(data.settings.probeCalibrationGraceDays || 0);
+  const effective = coldlib.effectiveRecordsDetailed(data, id);
+  const usedIds = {};
+  effective.rows.forEach((r) => { usedIds[r.id] = true; });
+  const droppedAuto = {};
+  effective.overrides.forEach((o) => { droppedAuto[o.droppedRecordId] = o.recordId; });
+  const rows = coldlib.recordsOfBatch(data, id).map((r) => {
+    const probe = coldlib.probeOf(data, r.probeId);
+    return Object.assign({}, r, {
+      probeCode: probeCode(data, r.probeId),
+      probeStatus: probe ? probe.status : '',
+      probeExpired: !coldlib.probeValidOn(probe, String(r.at).slice(0, 10), grace),
+      usedInCheck: usedIds[r.id] === true,
+      droppedByManualId: droppedAuto[r.id] || '',
+    });
+  });
   return Object.assign({}, decorateBatch(data, batch), {
     records: rows,
-    effectiveRecords: coldlib.effectiveRecords(data, id).map((r) => Object.assign({}, r, { probeCode: probeCode(data, r.probeId) })),
+    effectiveRecords: effective.rows.map((r) => Object.assign({}, r, { probeCode: probeCode(data, r.probeId) })),
     segments: coldlib.excursionStats(data, id).segments,
     chainGaps: coldlib.chainGaps(data, id).gaps,
+    overrides: effective.overrides,
+    suppressedRecords: effective.suppressed,
     releases: data.releases.filter((r) => r.batchId === id).slice().sort((a, b) => (a.decidedAt < b.decidedAt ? 1 : -1)),
   });
 }

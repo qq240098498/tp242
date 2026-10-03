@@ -230,10 +230,31 @@ tr.row-detail > td { background: #f7fbfc; border-bottom: 1px solid var(--line); 
 .pill-mute { color: var(--ink-soft); }
 
 .cond-list { list-style: none; margin: 0; padding: 0; }
-.cond-list li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--line-soft); }
+.cond-list li { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--line-soft); flex-wrap: wrap; }
 .cond-list li:last-child { border-bottom: none; }
+.cond-list li.is-bad { background: var(--accent-soft); padding-left: 6px; border-radius: 4px; }
 .cond-text { flex: 1 1 auto; }
 .cond-meta { color: var(--ink-soft); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cond-evidence { flex: 1 1 100%; color: var(--ink); font-size: 12px; padding-left: 52px; }
+.evidence-sub { flex: 1 1 100%; padding-left: 52px; margin-top: 2px; }
+.evidence-sub .mini-table { margin-top: 3px; max-width: 460px; }
+
+/* 反事实解释 */
+.cf-block { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.cf-block h4 { margin-bottom: 4px; }
+.cf-note { font-size: 12px; color: var(--primary-dark); background: var(--primary-soft); border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; }
+.cf-sub { margin-bottom: 8px; }
+.cf-sub-title { font-weight: 700; color: var(--primary-dark); font-size: 12px; margin-bottom: 4px; }
+.cf-item { border: 1px solid var(--line-soft); border-left: 3px solid var(--primary); border-radius: 4px; background: #fff; padding: 6px 8px; margin-bottom: 6px; font-size: 12px; }
+.cf-item-head { margin-bottom: 3px; }
+.cf-item-tail { color: var(--ink-soft); font-size: 12px; margin-top: 3px; }
+.detail-block-wide { flex: 1 1 100%; }
+
+/* 交互式试算条 */
+.whatif-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; padding: 6px 8px; background: #fffdf5; border: 1px dashed #e2cf8e; border-radius: 4px; }
+.whatif-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.whatif-chip { display: inline-flex; align-items: center; gap: 4px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 1px 8px; font-size: 12px; }
+.whatif-result { display: flex; align-items: center; gap: 8px; font-size: 12px; flex: 1 1 auto; }
 
 /* 指标卡 */
 .cards {

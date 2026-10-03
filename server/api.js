@@ -105,6 +105,41 @@ router.get('/batches/:id/release-check', withData((data, req) => {
   if (!batch) throw new AppError(404, 'BATCH_NOT_FOUND', '这个批次不存在');
   return coldlib.releaseCheck(data, batch);
 }));
+router.get('/batches/:id/explain', withData((data, req) => {
+  const batch = data.batches.find((b) => b.id === req.params.id);
+  if (!batch) throw new AppError(404, 'BATCH_NOT_FOUND', '这个批次不存在');
+  const check = coldlib.releaseCheck(data, batch);
+  return { batch: { id: batch.id, code: batch.code, product: batch.product, status: batch.status, loadedAt: batch.loadedAt }, check, counterfactuals: coldlib.counterfactuals(data, batch) };
+}));
+// 反事实试算：不落库，body { temps: {记录id: 温度}, settings: {参数名: 值} }
+router.post('/batches/:id/whatif', withData((data, req) => {
+  const batch = data.batches.find((b) => b.id === req.params.id);
+  if (!batch) throw new AppError(404, 'BATCH_NOT_FOUND', '这个批次不存在');
+  const body = req.body || {};
+  const temps = {};
+  const tempErrors = {};
+  if (body.temps && typeof body.temps === 'object') {
+    for (const id of Object.keys(body.temps)) {
+      if (!data.records.some((r) => r.id === id && r.batchId === batch.id)) { tempErrors[id] = '不是这个批次的记录'; continue; }
+      const v = Number(body.temps[id]);
+      if (!Number.isFinite(v)) { tempErrors[id] = '温度要是数字'; continue; }
+      temps[id] = v;
+    }
+  }
+  const allowedSettings = ['lowerLimitC', 'upperLimitC', 'allowExcursionMinutes', 'allowTotalExcursionMinutes', 'chainGapMinutes', 'probeCalibrationGraceDays'];
+  const settings = {};
+  if (body.settings && typeof body.settings === 'object') {
+    for (const key of allowedSettings) {
+      if (body.settings[key] !== undefined) {
+        const v = Number(body.settings[key]);
+        if (!Number.isFinite(v)) throw new AppError(400, 'VALIDATION_FAILED', '试算参数没通过校验', { [key]: '要是数字' });
+        settings[key] = v;
+      }
+    }
+  }
+  if (Object.keys(tempErrors).length) throw new AppError(400, 'VALIDATION_FAILED', '试算温度没通过校验', tempErrors);
+  return coldlib.evaluateScenario(data, batch, { temps }, settings);
+}));
 router.post('/batches/:id/decision', withData((data, req) => ({ __save: true, __body: res.decide(data, req.params.id, req.body || {}) })));
 
 router.get('/records', withData((data, req) => res.listRecords(data, req.query)));
